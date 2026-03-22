@@ -1,10 +1,536 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ca">
 <head>
-  <meta charset="UTF-8">
-  <title>Index</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feliç Aniversari!</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  #gameContainer {
+    position: relative;
+    width: 800px;
+    height: 450px;
+    overflow: hidden;
+    image-rendering: pixelated;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  #fadeOverlay {
+    position: absolute;
+    inset: 0;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 10;
+    transition: opacity 0.6s ease;
+  }
+  #fadeOverlay.fade-in  { opacity: 1; pointer-events: all; }
+  #fadeOverlay.fade-out { opacity: 0; pointer-events: none; }
+  #passwordModal {
+    display: none;
+    position: absolute;
+    inset: 0;
+    justify-content: center;
+    align-items: center;
+    z-index: 20;
+    background: rgba(0,0,0,0.5);
+  }
+  #passwordModal.active { display: flex; }
+  #passwordBox {
+    background: #1a1a2e;
+    border: 3px solid #e0a800;
+    padding: 28px 32px;
+    text-align: center;
+    box-shadow: 6px 6px 0 #000;
+    min-width: 300px;
+  }
+  #passwordBox p {
+    color: #fff;
+    font-size: 13px;
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+    line-height: 1.6;
+  }
+  #passwordBox .label {
+    color: #e0a800;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  #passwordInput {
+    background: #000;
+    border: 2px solid #e0a800;
+    color: #e0a800;
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    letter-spacing: 4px;
+    padding: 8px 12px;
+    width: 100%;
+    text-align: center;
+    outline: none;
+    margin-bottom: 14px;
+  }
+  #passwordInput::placeholder { color: #555; letter-spacing: 2px; }
+  #passwordSubmit {
+    background: #e0a800;
+    border: none;
+    color: #000;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    padding: 8px 24px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  #passwordSubmit:hover { background: #fff; }
+  #passwordError {
+    color: #ff4444;
+    font-size: 11px;
+    letter-spacing: 1px;
+    margin-top: 10px;
+    min-height: 16px;
+  }
+  #hint {
+    position: absolute;
+    bottom: 14px;
+    left: 0; right: 0;
+    text-align: center;
+    color: rgba(255,255,255,0.35);
+    font-size: 11px;
+    letter-spacing: 2px;
+    pointer-events: none;
+    z-index: 5;
+    animation: blink 2s infinite;
+  }
+  @keyframes blink {
+    0%,100% { opacity: 0.35; }
+    50% { opacity: 0.7; }
+  }
+</style>
 </head>
 <body>
-  <p>Hello</p>
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="800" height="450"></canvas>
+  <div id="fadeOverlay"></div>
+  <div id="passwordModal">
+    <div id="passwordBox">
+      <div class="label">🔐 Contrasenya necessària</div>
+      <p id="passwordPromptText">Quina és la paraula?</p>
+      <input id="passwordInput" type="text" placeholder="escriu aquí..." autocomplete="off" />
+      <button id="passwordSubmit">Entrar</button>
+      <div id="passwordError"></div>
+    </div>
+  </div>
+  <div id="hint">← → FLETXES PER MOURE'T</div>
+</div>
+
+<script>
+// ─── SPRITES ────────────────────────────────────────────────────
+const SPRITE_DATA = {
+  roser_front: "/fotos/roser_front.png", 
+  roser_left: "/fotos/roser_left.png",
+  roser_right: "/fotos/roser_right.png",
+  joan_front: "/fotos/joan_front.png",
+  joan_left: "/fotos/joan_left.png",
+  joan_right: "/fotos/joan_right.png",
+};
+
+// Preload all sprites
+const SPRITES = {};
+for (const [k, src] of Object.entries(SPRITE_DATA)) {
+  const img = new Image();
+  img.src = src;
+  SPRITES[k] = img;
+}
+
+// ─── CONFIG ─────────────────────────────────────────────────────
+const CONFIG = {
+  password: "tobotronc",
+  friendName: "Roser",
+  yourName: "Joan",
+  npcLines: [
+    "OH, OSTRES.",
+    "ROSER!!! ETS TU!",
+    "FELIÇ ANIVERSARI!! 🎂",
+    // Joan can add more lines here
+    "T\'he fet alguna cosa...",
+    "Però primer —",
+    "Necessito que et vegis identificada.",
+    "Quina és la nostra paraula? 🔑",
+  ],
+  wrongPasswordLines: [
+    "Hmm... no, no és aquesta 🤔",
+    "Bona prova!! Però no.",
+    "Segur que ets tu??",
+    "Intenció encertada, però no.",
+  ],
+};
+
+// ─── ENGINE ─────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const W = 800, H = 450;
+const GROUND_Y = 310;
+const CHAR_W = 52, CHAR_H = 76;
+const SPEED = 3;
+
+function drawSprite(spriteKey, x, y) {
+  const img = SPRITES[spriteKey];
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x, y, CHAR_W, CHAR_H);
+  } else {
+    // Fallback placeholder
+    ctx.fillStyle = spriteKey.startsWith('roser') ? '#6a8dff' : '#ff7c5c';
+    ctx.fillRect(x, y + 20, CHAR_W, CHAR_H - 20);
+    ctx.fillStyle = '#f5c5a3';
+    ctx.fillRect(x + 8, y, CHAR_W - 16, 24);
+    ctx.font = '9px Courier New';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(spriteKey.startsWith('roser') ? CONFIG.friendName : CONFIG.yourName, x + CHAR_W/2, y - 4);
+    ctx.textAlign = 'left';
+  }
+}
+
+function getCharSprite(who, facing) {
+  // who: 'roser' or 'joan', facing: 1=right, -1=left, 0=front
+  if (facing === 0) return who + '_front';
+  if (facing === 1) return who + '_right';
+  return who + '_left';
+}
+
+function drawBubble(text, x, y) {
+  const lines = text.split('\n');
+  const lineH = 18;
+  const pad = 10;
+  const maxW = Math.max(...lines.map(l => l.length)) * 7.5 + pad * 2;
+  const bH = lines.length * lineH + pad * 2;
+  const bX = Math.max(4, Math.min(W - maxW - 4, x - maxW / 2));
+  const bY = y - bH - 14;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(bX + 3, bY + 3, maxW, bH);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(bX, bY, maxW, bH);
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bX, bY, maxW, bH);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(x - 6, bY + bH);
+  ctx.lineTo(x + 6, bY + bH);
+  ctx.lineTo(x, bY + bH + 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#111';
+  ctx.font = 'bold 12px Courier New';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, bX + pad, bY + pad + 13 + i * lineH);
+  });
+}
+
+function drawGround(scrollX, style) {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  sky.addColorStop(0, '#0d1b2a');
+  sky.addColorStop(1, '#1b3a5c');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+  ctx.fillStyle = '#fff';
+  const stars = [[80,40],[200,80],[350,30],[500,60],[650,20],[720,90],[140,110],[420,100]];
+  stars.forEach(([sx, sy]) => ctx.fillRect(((sx - scrollX * 0.2) % W + W) % W, sy, 2, 2));
+  ctx.fillStyle = '#2d5a1b';
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.fillStyle = '#1e3d12';
+  ctx.fillRect(0, GROUND_Y, W, 8);
+  ctx.fillStyle = '#4a8a2a';
+  for (let gx = ((-scrollX * 0.8) % 48 + 48) % 48; gx < W; gx += 48) {
+    ctx.fillRect(gx, GROUND_Y - 4, 4, 4);
+    ctx.fillRect(gx + 6, GROUND_Y - 6, 4, 6);
+    ctx.fillRect(gx + 14, GROUND_Y - 3, 4, 3);
+  }
+}
+
+function drawDoor(x, locked, label) {
+  const dW = 48, dH = 80;
+  const dY = GROUND_Y - dH;
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(x - 4, dY - 4, dW + 8, dH + 4);
+  ctx.fillStyle = locked ? '#8b5e2a' : '#4CAF50';
+  ctx.fillRect(x, dY, dW, dH);
+  ctx.fillStyle = locked ? '#7a5022' : '#388E3C';
+  ctx.fillRect(x + 6, dY + 8, dW - 12, dH/2 - 12);
+  ctx.fillRect(x + 6, dY + dH/2 + 4, dW - 12, dH/2 - 12);
+  ctx.fillStyle = locked ? '#e0a800' : '#FFF';
+  ctx.beginPath();
+  ctx.arc(x + dW - 10, dY + dH/2, 5, 0, Math.PI*2);
+  ctx.fill();
+  if (locked) {
+    ctx.font = '14px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🔒', x + dW/2, dY + dH/2 - 8);
+    ctx.textAlign = 'left';
+  }
+  if (label) {
+    ctx.font = '10px Courier New';
+    ctx.fillStyle = '#e0a800';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + dW/2, dY - 10);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ─── STATE ──────────────────────────────────────────────────────
+let scene = 1;
+let scrollX = 0;
+
+const roser = {
+  x: 100, y: GROUND_Y - CHAR_H,
+  facing: 1, // 1=right, -1=left, 0=front
+};
+
+const joan = {
+  x: 680, y: GROUND_Y - CHAR_H,
+  facing: -1,
+  dialogueIndex: 0,
+  talking: false,
+};
+
+const DOOR_WORLD_X = 820;
+const NPC_TRIGGER_DIST = 180;
+const PASSWORD_TRIGGER_DIST = 80;
+
+let keys = {};
+let passwordOpen = false;
+let passwordSolved = false;
+let transitioning = false;
+let shownLines = 0;
+let dialogueCooldown = 0;
+
+// ─── SCENE 1 ────────────────────────────────────────────────────
+function updateScene1() {
+  if (keys['ArrowRight'] || keys['d']) { roser.x += SPEED; roser.facing = 1; }
+  if (keys['ArrowLeft']  || keys['a']) { roser.x -= SPEED; roser.facing = -1; }
+  roser.x = Math.max(20, roser.x);
+  if (roser.x > W * 0.55) scrollX += SPEED;
+  if (scrollX > 400) {
+    startTransition(() => {
+      scene = 2; scrollX = 0; roser.x = 80;
+      shownLines = 0; joan.talking = false; dialogueCooldown = 0;
+    });
+  }
+}
+
+function drawScene1() {
+  drawGround(scrollX);
+  if (scrollX < 10) {
+    ctx.font = '11px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.textAlign = 'center';
+    ctx.fillText("CAMINA CAP A LA DRETA →", W/2, GROUND_Y - 100);
+    ctx.textAlign = 'left';
+  }
+  const rx = roser.x - scrollX * 0.3;
+  drawSprite(getCharSprite('roser', roser.facing), rx, roser.y);
+}
+
+// ─── SCENE 2 ────────────────────────────────────────────────────
+function updateScene2() {
+  if (passwordOpen || transitioning) return;
+  if (keys['ArrowRight'] || keys['d']) { roser.x += SPEED; roser.facing = 1; }
+  if (keys['ArrowLeft']  || keys['a']) { roser.x -= SPEED; roser.facing = -1; }
+  roser.x = Math.max(20, roser.x);
+
+  const camThreshold = W * 0.5;
+  if (roser.x - scrollX > camThreshold && scrollX < 500) scrollX = roser.x - camThreshold;
+  if (roser.x - scrollX < 80) scrollX = Math.max(0, roser.x - 80);
+
+  const dist = Math.abs(roser.x - joan.x);
+  if (dist < NPC_TRIGGER_DIST) {
+    joan.talking = true;
+    joan.facing = roser.x < joan.x ? -1 : 1;
+    dialogueCooldown--;
+    if (dialogueCooldown <= 0 && shownLines < CONFIG.npcLines.length) {
+      shownLines++;
+      dialogueCooldown = 80;
+    }
+  } else {
+    joan.talking = false;
+    shownLines = 0;
+  }
+
+  const distToDoor = Math.abs(roser.x - DOOR_WORLD_X);
+  if (distToDoor < PASSWORD_TRIGGER_DIST && !passwordSolved && shownLines >= CONFIG.npcLines.length) {
+    openPasswordModal();
+  }
+  if (passwordSolved && distToDoor < 60) {
+    startTransition(() => { scene = 3; scrollX = 0; roser.x = 100; });
+  }
+}
+
+function drawScene2() {
+  drawGround(scrollX);
+  const joanSX = joan.x - scrollX;
+  drawSprite(getCharSprite('joan', joan.facing), joanSX, joan.y);
+  const doorSX = DOOR_WORLD_X - scrollX;
+  drawDoor(doorSX, !passwordSolved, passwordSolved ? 'OBERT!' : '');
+  const roserSX = roser.x - scrollX;
+  drawSprite(getCharSprite('roser', roser.facing), roserSX, roser.y);
+  if (joan.talking && shownLines > 0) {
+    const line = CONFIG.npcLines[shownLines - 1];
+    drawBubble(line, joanSX + CHAR_W/2, joan.y);
+  }
+  const distToDoor = Math.abs(roser.x - DOOR_WORLD_X);
+  if (distToDoor < 200 && distToDoor > PASSWORD_TRIGGER_DIST && !passwordSolved && shownLines >= CONFIG.npcLines.length) {
+    ctx.font = '10px Courier New';
+    ctx.fillStyle = 'rgba(224,168,0,0.8)';
+    ctx.textAlign = 'center';
+    ctx.fillText("APROPA'T A LA PORTA...", W/2, 30);
+    ctx.textAlign = 'left';
+  }
+  if (passwordSolved && distToDoor > 60) {
+    ctx.font = '10px Courier New';
+    ctx.fillStyle = 'rgba(100,255,100,0.8)';
+    ctx.textAlign = 'center';
+    ctx.fillText("PASSA PER LA PORTA! →", W/2, 30);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ─── SCENE 3 (hub placeholder) ──────────────────────────────────
+function updateScene3() {
+  if (keys['ArrowRight'] || keys['d']) { roser.x += SPEED; roser.facing = 1; }
+  if (keys['ArrowLeft']  || keys['a']) { roser.x -= SPEED; roser.facing = -1; }
+  roser.x = Math.max(20, Math.min(W - CHAR_W - 20, roser.x));
+}
+
+function drawScene3() {
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1a0e2e');
+  bg.addColorStop(1, '#2d1b4e');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#3d2b1a';
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.fillStyle = '#2e1f10';
+  ctx.fillRect(0, GROUND_Y, W, 6);
+  ctx.fillStyle = '#4a3520';
+  for (let fx = 0; fx < W; fx += 60) ctx.fillRect(fx, GROUND_Y + 6, 2, H - GROUND_Y);
+
+  ctx.font = 'bold 14px Courier New';
+  ctx.fillStyle = '#e0a800';
+  ctx.textAlign = 'center';
+  ctx.fillText('✨ EL MÓN CENTRAL ✨', W/2, 120);
+  ctx.font = '11px Courier New';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('(més habitacions aviat...)', W/2, 145);
+  ctx.textAlign = 'left';
+
+  const doors = [
+    { x: 150, label: '🖼 MUSEU' },
+    { x: 330, label: '📚 BIBLIOTECA' },
+    { x: 510, label: '🎬 CINEMA' },
+    { x: 650, label: '🎂 FESTA' },
+  ];
+  doors.forEach(d => drawDoor(d.x, false, d.label));
+
+  const roserSX = roser.x;
+  drawSprite(getCharSprite('roser', roser.facing), roserSX, roser.y);
+  const followX = roser.x - 65 * roser.facing;
+  const joanFacing = roser.facing;
+  drawSprite(getCharSprite('joan', joanFacing), followX, joan.y);
+}
+
+// ─── PASSWORD ───────────────────────────────────────────────────
+function openPasswordModal() {
+  if (passwordOpen) return;
+  passwordOpen = true;
+  document.getElementById('passwordModal').classList.add('active');
+  document.getElementById('passwordInput').value = '';
+  document.getElementById('passwordError').textContent = '';
+  document.getElementById('passwordInput').focus();
+}
+function closePasswordModal() {
+  passwordOpen = false;
+  document.getElementById('passwordModal').classList.remove('active');
+}
+document.getElementById('passwordSubmit').addEventListener('click', checkPassword);
+document.getElementById('passwordInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') checkPassword();
+  e.stopPropagation();
+});
+function checkPassword() {
+  const val = document.getElementById('passwordInput').value.trim().toLowerCase();
+  if (val === CONFIG.password.toLowerCase()) {
+    closePasswordModal();
+    passwordSolved = true;
+  } else {
+    const wrongs = CONFIG.wrongPasswordLines;
+    document.getElementById('passwordError').textContent = wrongs[Math.floor(Math.random() * wrongs.length)];
+    document.getElementById('passwordInput').value = '';
+    document.getElementById('passwordInput').focus();
+  }
+}
+
+// ─── TRANSITIONS ────────────────────────────────────────────────
+function startTransition(onMid) {
+  if (transitioning) return;
+  transitioning = true;
+  const overlay = document.getElementById('fadeOverlay');
+  overlay.classList.add('fade-in');
+  setTimeout(() => {
+    onMid();
+    setTimeout(() => {
+      overlay.classList.remove('fade-in');
+      overlay.classList.add('fade-out');
+      setTimeout(() => { overlay.classList.remove('fade-out'); transitioning = false; }, 700);
+    }, 300);
+  }, 650);
+}
+
+// ─── INPUT ──────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (['ArrowLeft','ArrowRight','a','d'].includes(e.key)) {
+    document.getElementById('hint').style.display = 'none';
+  }
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ─── LOOP ───────────────────────────────────────────────────────
+function update() {
+  if (!transitioning) {
+    if (scene === 1) updateScene1();
+    else if (scene === 2) updateScene2();
+    else if (scene === 3) updateScene3();
+  }
+}
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  if (scene === 1) drawScene1();
+  else if (scene === 2) drawScene2();
+  else if (scene === 3) drawScene3();
+}
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
 </body>
 </html>
